@@ -17,22 +17,29 @@ the test controls time and price. This repository shows that with
 ## What it shows
 
 `contracts/dca` lets a user swap through a router at most once per day, and only
-while the quote meets the user's limit. The test deploys it locally and runs it
-against the real Soroswap router
+while the quote meets the user's limit. Its settings are fixed at installation.
+The test deploys it locally and runs it against the real Soroswap router
 `CAG5LRYQ5JVEUI5TEID72EYOVX44TTUJT5BQR2J6J77FH65PCCFAJDDH` and XLM/USDC pair
 `CAM7DY53G63XA4AJRS24Z6VFYAFSSF76C3RZ45BE5YU3FQS5255OOABP`.
 
 ```rust
-let id = fork.deploy(dca::WASM, ());
-let dca = dca::Client::new(env, &id);
-let execute = || dca.try_execute(&router, &user, &path, &TEN_USDC, &limit);
+let limit = quote_ten_usdc(fork) * 9 / 10;
+let settings = (router.clone(), user, usdc_to_xlm(fork), TEN_USDC, limit);
+let dca_address = fork.deploy(dca::WASM, settings);
+let dca = dca::Client::new(env, &dca_address);
 
-let first = execute().unwrap().unwrap();
-assert_eq!(reserves(), (before.0 - first, before.1 + TEN_USDC));
-assert_eq!(execute(), Err(Ok(dca::Error::TooEarly)));
+// The first run swaps through the real router and moves the real pool.
+let (xlm_before, usdc_before) = pool_reserves(fork);
+let xlm_out = dca.execute();
+let expected = (xlm_before - xlm_out, usdc_before + TEN_USDC);
+assert_eq!(pool_reserves(fork), expected);
 
-env.ledger().set_timestamp(start + DAY);
-let second = execute().unwrap().unwrap();
+// Immediately again: the contract refuses.
+assert_eq!(dca.try_execute(), Err(Ok(dca::Error::TooEarly)));
+
+// One day later it runs again.
+env.ledger().set_timestamp(env.ledger().timestamp() + DAY);
+let second_xlm_out = dca.execute();
 ```
 
 ## Observed results
@@ -79,7 +86,7 @@ describes the committed one.
 ## Rebuild the contract
 
 `fixtures/dca.wasm` is committed, and its SHA-256 is pinned in
-`tests/demo.rs`: `c033142dfdca6dc646095d308b23c66f4b984c3b0e716927cd0a561172445807`.
+`tests/demo.rs`: `4dc4e0c72e86b16541c0808afde2eab69ec7cb9a35c8e2aa415e03bec2077c7f`.
 
 ```sh
 RUSTUP_TOOLCHAIN=1.92.0 stellar contract build \

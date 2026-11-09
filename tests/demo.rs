@@ -13,7 +13,7 @@ mod dca {
 
     soroban_sdk::contractimport!(
         file = "fixtures/dca.wasm",
-        sha256 = "c033142dfdca6dc646095d308b23c66f4b984c3b0e716927cd0a561172445807",
+        sha256 = "4dc4e0c72e86b16541c0808afde2eab69ec7cb9a35c8e2aa415e03bec2077c7f",
     );
 }
 
@@ -47,51 +47,62 @@ fn local_user(fork: &ScenarioFork<'_>, label: &str, usdc: i128) -> Address {
     user
 }
 
+fn usdc_to_xlm(fork: &ScenarioFork<'_>) -> Vec<Address> {
+    vec![fork.env(), fork.contract(USDC), fork.contract(XLM)]
+}
+
+/// The real pair's reserves, as (XLM, USDC).
+fn pool_reserves(fork: &ScenarioFork<'_>) -> (i128, i128) {
+    fork.invoke(&fork.contract(PAIR), "get_reserves", ())
+}
+
+/// XLM out for ten USDC in, quoted by the real router.
+fn quote_ten_usdc(fork: &ScenarioFork<'_>) -> i128 {
+    let args = (TEN_USDC, usdc_to_xlm(fork));
+    let amounts: Vec<i128> = fork.invoke(&fork.contract(ROUTER), "router_get_amounts_out", args);
+    amounts.get_unchecked(1)
+}
+
 #[test]
 fn dca_runs_against_the_real_pool() {
     runner()
         .run(|fork| {
             fork.mock_all_auths();
             let env = fork.env();
-            let (router, pair) = (fork.contract(ROUTER), fork.contract(PAIR));
-            let path = vec![env, fork.contract(USDC), fork.contract(XLM)];
-            let reserves = || -> (i128, i128) { fork.invoke(&pair, "get_reserves", ()) };
-            let quote = || {
-                let args = (TEN_USDC, path.clone());
-                let out: Vec<i128> = fork.invoke(&router, "router_get_amounts_out", args);
-                out.get_unchecked(1)
-            };
-
+            let router = fork.contract(ROUTER);
             let user = local_user(fork, "dca-user", 10 * TEN_USDC);
-            let limit = quote() * 9 / 10;
-            let id = fork.deploy(dca::WASM, ());
-            let dca = dca::Client::new(env, &id);
-            let execute = || dca.try_execute(&router, &user, &path, &TEN_USDC, &limit);
+
+            let limit = quote_ten_usdc(fork) * 9 / 10;
+            let settings = (router.clone(), user, usdc_to_xlm(fork), TEN_USDC, limit);
+            let dca_address = fork.deploy(dca::WASM, settings);
+            let dca = dca::Client::new(env, &dca_address);
 
             // The first run swaps through the real router and moves the real pool.
-            let before = reserves();
-            let first = execute().unwrap().unwrap();
-            assert_eq!(reserves(), (before.0 - first, before.1 + TEN_USDC));
+            let (xlm_before, usdc_before) = pool_reserves(fork);
+            let xlm_out = dca.execute();
+            let expected = (xlm_before - xlm_out, usdc_before + TEN_USDC);
+            assert_eq!(pool_reserves(fork), expected);
 
             // Immediately again: the contract refuses.
-            assert_eq!(execute(), Err(Ok(dca::Error::TooEarly)));
+            assert_eq!(dca.try_execute(), Err(Ok(dca::Error::TooEarly)));
 
             // One day later it runs again.
-            let start = env.ledger().timestamp();
-            env.ledger().set_timestamp(start + DAY);
-            let second = execute().unwrap().unwrap();
+            env.ledger().set_timestamp(env.ledger().timestamp() + DAY);
+            let second_xlm_out = dca.execute();
 
             // Another account makes a large swap, moving the real pool's price.
-            let size = reserves().1 / 5;
-            let whale = local_user(fork, "whale", size);
-            let args = (size, 0_i128, path.clone(), whale, u64::MAX);
-            let _: Vec<i128> = fork.invoke(&router, "swap_exact_tokens_for_tokens", args);
-            let moved = quote();
+            let (_, usdc_reserve) = pool_reserves(fork);
+            let whale_usdc = usdc_reserve / 5;
+            let whale = local_user(fork, "whale", whale_usdc);
+            let swap_args = (whale_usdc, 0_i128, usdc_to_xlm(fork), whale, u64::MAX);
+            let _: Vec<i128> = fork.invoke(&router, "swap_exact_tokens_for_tokens", swap_args);
+            let moved_quote = quote_ten_usdc(fork);
 
             // The next day the quote is below the limit, so the contract refuses.
-            env.ledger().set_timestamp(start + 2 * DAY);
-            assert_eq!(execute(), Err(Ok(dca::Error::BelowLimit)));
-            println!("first {first}, second {second}, whale {size}, quote {moved}, limit {limit}");
+            env.ledger().set_timestamp(env.ledger().timestamp() + DAY);
+            assert_eq!(dca.try_execute(), Err(Ok(dca::Error::BelowLimit)));
+            println!("first {xlm_out}, second {second_xlm_out}, whale {whale_usdc}");
+            println!("quote after the large swap {moved_quote}, limit {limit}");
         })
         .expect("the story must replay from the bundle");
 }

@@ -1,11 +1,16 @@
-//! An example dollar-cost-averaging guard: a user may swap at most once per day
-//! through a router, and only while the quote meets their limit. Not audited;
-//! not for production.
+//! An example dollar-cost-averaging contract. Its settings are fixed when it is
+//! installed. A user can then swap through a router at most once per day, and
+//! only while the quote meets their limit. Not audited; not for production.
 
 #![no_std]
 
-use soroban_sdk::{contract, contractclient, contracterror, contractimpl, Address, Env, Vec};
+use soroban_sdk::{
+    contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address,
+    Env, Symbol, Vec,
+};
 
+const SETTINGS: Symbol = symbol_short!("SETTINGS");
+const LAST_RUN: Symbol = symbol_short!("LAST_RUN");
 const INTERVAL: u64 = 86_400;
 
 #[contractclient(name = "RouterClient")]
@@ -29,40 +34,63 @@ pub enum Error {
     BelowLimit = 2,
 }
 
+#[contracttype]
+pub struct Settings {
+    pub router: Address,
+    pub user: Address,
+    pub path: Vec<Address>,
+    pub amount_in: i128,
+    pub min_out: i128,
+}
+
 #[contract]
 pub struct Dca;
 
 #[contractimpl]
 impl Dca {
-    pub fn execute(
+    pub fn __constructor(
         env: Env,
         router: Address,
         user: Address,
         path: Vec<Address>,
         amount_in: i128,
         min_out: i128,
-    ) -> Result<i128, Error> {
-        user.require_auth();
+    ) {
+        let settings = Settings {
+            router,
+            user,
+            path,
+            amount_in,
+            min_out,
+        };
+        env.storage().instance().set(&SETTINGS, &settings);
+    }
 
+    pub fn execute(env: Env) -> Result<i128, Error> {
         let store = env.storage().instance();
+        let settings: Settings = store.get(&SETTINGS).unwrap();
+        settings.user.require_auth();
+
         let now = env.ledger().timestamp();
-        if store
-            .get(&user)
-            .is_some_and(|last: u64| now < last + INTERVAL)
-        {
+        let last_run: Option<u64> = store.get(&LAST_RUN);
+        if last_run.is_some_and(|last_run| now < last_run + INTERVAL) {
             return Err(Error::TooEarly);
         }
 
-        let router = RouterClient::new(&env, &router);
-        let quote = router.router_get_amounts_out(&amount_in, &path);
-        if quote.get_unchecked(1) < min_out {
+        let router = RouterClient::new(&env, &settings.router);
+        let quote = router.router_get_amounts_out(&settings.amount_in, &settings.path);
+        if quote.get_unchecked(1) < settings.min_out {
             return Err(Error::BelowLimit);
         }
 
-        store.set(&user, &now);
-        let deadline = now + 60;
-        let amounts =
-            router.swap_exact_tokens_for_tokens(&amount_in, &min_out, &path, &user, &deadline);
+        store.set(&LAST_RUN, &now);
+        let amounts = router.swap_exact_tokens_for_tokens(
+            &settings.amount_in,
+            &settings.min_out,
+            &settings.path,
+            &settings.user,
+            &(now + 60),
+        );
         Ok(amounts.get_unchecked(1))
     }
 }
