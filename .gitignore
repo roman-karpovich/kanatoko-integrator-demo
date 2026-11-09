@@ -1,0 +1,4 @@
+/target
+/contracts/dca/target
+.kanatoko/
+test_snapshots/

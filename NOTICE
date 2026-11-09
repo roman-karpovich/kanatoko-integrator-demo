@@ -1,0 +1,29 @@
+Kanatoko integrator demo
+Copyright 2026 Roman Karpovich
+
+The source in this repository is licensed under the MIT License or the
+Apache License, Version 2.0, at your option (see LICENSE-MIT and
+LICENSE-APACHE).
+
+The file fixtures/capture.json contains contract code and contract data
+captured unmodified from the public Stellar mainnet at ledger 65391822,
+including WASM from the Soroswap project:
+
+  Soroswap core (router and pair)
+  https://github.com/soroswap/core
+  Licensed under the Apache License, Version 2.0.
+
+  Router: 4c3db3ebd2d6a2ab23de1f622eaabb39501539b4611b68622ec4e47f76c4ba07
+  Pair:   18051456816b66f12e773a56f77c5794fac1b1fb7ab6e22d4fad5a412770f73e
+  (SHA-256 of each module)
+
+  Soroswap is credited here as the author of this code. The example contract
+  in contracts/dca and the tests in this repository are not Soroswap code.
+  This repository is not affiliated with or endorsed by Soroswap.
+
+The same capture also includes other public mainnet state read by the test: the
+XLM and USDC Stellar Asset Contract instances and the pair's balances in them,
+the USDC admin contract and its WASM (SHA-256
+aba81900bc82d24a6f5b66a6fee775bc51543f91dc89e824bd96ffcf3879dba1), and one
+account entry. These are reproduced unmodified as ledger data and are not
+covered by this repository's licences.

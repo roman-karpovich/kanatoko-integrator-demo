@@ -1,0 +1,14 @@
+[package]
+name = "kanatoko-integrator-demo"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Test your own Soroban contract against real mainnet state with Kanatoko"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+exclude = ["contracts/dca"]
+
+[dev-dependencies]
+kanatoko = { version = "=29.1.0", features = ["capture"] }
